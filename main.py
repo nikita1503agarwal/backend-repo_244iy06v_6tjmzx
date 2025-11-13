@@ -1,8 +1,12 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
+from database import create_document, get_documents
+from schemas import Art
 
-app = FastAPI()
+app = FastAPI(title="Vintage Art Gallery API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,7 +18,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Vintage Art Gallery Backend Running"}
 
 @app.get("/api/hello")
 def hello():
@@ -33,37 +37,53 @@ def test_database():
     }
     
     try:
-        # Try to import database module
         from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
+            response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
             response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
             response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
             response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
     return response
 
+# Request models
+class ArtCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    artist: Optional[str] = None
+    tags: List[str] = []
+    image_data: str
+
+@app.post("/api/art", status_code=201)
+def create_art(art: ArtCreate):
+    try:
+        art_doc = Art(**art.model_dump())
+        art_id = create_document("art", art_doc)
+        return {"id": art_id, "message": "Artwork uploaded successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/art")
+def list_art(limit: int = 50):
+    try:
+        items = get_documents("art", {}, limit)
+        # Convert ObjectId to string and sanitize
+        def serialize(doc):
+            d = {k: v for k, v in doc.items() if k != "_id"}
+            d["id"] = str(doc.get("_id"))
+            return d
+        return [serialize(doc) for doc in items]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
